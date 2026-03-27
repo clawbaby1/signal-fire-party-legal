@@ -1,0 +1,64 @@
+name: Site Check
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+jobs:
+  validate-site:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate HTML files and internal links
+        run: |
+          python3 - <<'PY'
+          from html.parser import HTMLParser
+          from pathlib import Path
+          from urllib.parse import urlparse, unquote
+          import sys
+
+          class LinkParser(HTMLParser):
+              def __init__(self):
+                  super().__init__()
+                  self.links = []
+
+              def handle_starttag(self, tag, attrs):
+                  for key, value in attrs:
+                      if key in {"href", "src"} and value:
+                          self.links.append(value)
+
+          root = Path(".")
+          html_files = sorted(root.glob("*.html"))
+          if not html_files:
+              print("No root-level HTML files found")
+              sys.exit(1)
+
+          missing = []
+          for html_file in html_files:
+              parser = LinkParser()
+              parser.feed(html_file.read_text(encoding="utf-8"))
+              for raw_link in parser.links:
+                  if raw_link.startswith(("http://", "https://", "mailto:", "tel:", "#", "javascript:")):
+                      continue
+                  parsed = urlparse(raw_link)
+                  path_text = unquote(parsed.path)
+                  if not path_text or path_text == "/":
+                      continue
+                  target = (root / path_text.lstrip("/")) if path_text.startswith("/") else (html_file.parent / path_text)
+                  if target.is_dir():
+                      target = target / "index.html"
+                  if not target.exists():
+                      missing.append(f"{html_file}: {raw_link} -> {target}")
+
+          if missing:
+              print("Broken local links detected:")
+              for item in missing:
+                  print(item)
+              sys.exit(1)
+
+          print(f"Validated {len(html_files)} HTML files")
+          PY
